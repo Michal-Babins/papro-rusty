@@ -99,7 +99,7 @@ db init
 db add [options] <files>...
   -l, --level <LEVEL>     Taxonomic level (genus|species|strain)
   -n, --name <NAME>       Profile name
-  -k, --kmer-size <SIZE>  K-mer size (default: 31)
+  -k, --kmer-size <SIZE>  K-mer size (default: 21)
 
 # List profiles
 db list [options]
@@ -132,8 +132,8 @@ analyze [options] <files>...
 Profiles in database:
 Name                 Level      K-mer size     Total k-mers    Created
 --------------------------------------------------------------------------------
-e_coli              Species    31             1234567         2024-03-09 10:30:45
-s_enterica          Species    31             987654          2024-03-09 11:15:30
+Escherichia_coli             Species    31             1234567         2024-03-09 10:30:45
+Salmonella_enterica          Species    31             987654          2024-03-09 11:15:30
 ```
 
 ### Analysis Results
