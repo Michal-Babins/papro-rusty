@@ -236,6 +236,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📧 Contact
 
-Your Name - [@yourusername](https://twitter.com/yourusername) - email@example.com
+Your Name - Michal Babinski - mbabinski17@gmail.com
 
-Project Link: [https://github.com/yourusername/papro-rusty](https://github.com/yourusername/papro-rusty)
+Project Link: [https://github.com/Michal-Babins/papro-rusty](https://github.com/Michal-Babins/papro-rusty)
