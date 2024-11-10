@@ -221,7 +221,7 @@ CREATE TABLE kmers (
 
 ## 📝 Contributing
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
+Contributions are welcome! No formal guide yet.
 
 ## 📄 License
 
