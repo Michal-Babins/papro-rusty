@@ -1,7 +1,7 @@
 # 🧬 PAPRO-RUSTY
 ## A Pathothogen based K-mer Profiler written in Rust (beta)
 
-[![Rust](https://github.com/yourusername/papro/workflows/Rust/badge.svg)](https://github.com/yourusername/papro-rusty/actions)
+[![Rust](https://github.com/Michal-Babins/papro-rusty/workflows/Rust/badge.svg)](https://github.com/Michal-Babins/papro-rusty/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A lightweight k-mer based tool for pathogen profiling and taxonomic classification. This tool allows you to create, manage, and analyze k-mer profiles from genomic sequences for pathogen identification and characterization.
