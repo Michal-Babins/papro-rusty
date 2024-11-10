@@ -1,6 +1,6 @@
 # 🧬 PAPRO-RUSTY
 ## A Pathothogen based K-mer Profiler written in Rust (beta)
-
+### Package Under Counstruction 🚧
 [![Rust](https://github.com/Michal-Babins/papro-rusty/workflows/Rust/badge.svg)](https://github.com/Michal-Babins/papro-rusty/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
