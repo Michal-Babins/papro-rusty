@@ -10,12 +10,13 @@ use log::{info, warn};
 use profile::ProfileMatch;
 use std::io::Write;
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 
 use crate::cli::{Cli, Commands, DatabaseSubcommand, ExportFormat};
 use crate::db::Database;
 use crate::io::FastxReader;
+use crate::io::output_analysis;
 use crate::kmer::KmerCounter;
 use crate::profile::ProfileAnalyzer;
 
@@ -179,7 +180,7 @@ fn handle_db_command(cmd: cli::DatabaseCommand, verbose: bool) -> Result<()> {
             }
         }
 
-        DatabaseSubcommand::Stats { detailed } => {
+        DatabaseSubcommand::Stats => {
             let db = Database::new(&cmd.database)?;
             let stats = db.get_statistics()?;
             
@@ -192,16 +193,41 @@ fn handle_db_command(cmd: cli::DatabaseCommand, verbose: bool) -> Result<()> {
             for (level, count) in &stats.profiles_by_level {
                 println!("{}\t{}", level, count);
             }
-
-            if detailed {
-                // Add detailed statistics if implemented
-            }
         }
 
         DatabaseSubcommand::Validate => {
             let db = Database::new(&cmd.database)?;
             info!("Validating database integrity...");
-            // Add validation logic here
+            
+            match db.validate() {
+                Ok(report) => {
+                    if report.has_errors() {
+                        println!("\nErrors found:");
+                        for error in report.errors() {
+                            println!("- {}", error);
+                        }
+                    }
+                    
+                    if report.has_warnings() {
+                        println!("\nWarnings:");
+                        for warning in report.warnings() {
+                            println!("- {}", warning);
+                        }
+                    }
+                    
+                    if !report.has_errors() && !report.has_warnings() {
+                        println!("Database validation successful - no issues found");
+                    }
+                    
+                    if report.has_errors() {
+                        return Err(anyhow::anyhow!("Database validation failed"));
+                    }
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("Database validation failed: {}", e));
+                }
+            }
+            
             info!("Database validation complete");
         }
     }
@@ -231,111 +257,7 @@ fn handle_analyze_command(cmd: cli::AnalyzeCommand, verbose: bool) -> Result<()>
     info!("Found {} unique k-mers in sample", counter.unique_kmers());
 
     let matches = analyzer.analyze_sample(&counter)?;
-    output_analysis(&matches, cmd.detailed, &analyzer, &counter, cmd.output)?;
-
-    Ok(())
-}
-
-fn output_analysis(
-    matches: &[ProfileMatch],
-    detailed: bool,
-    analyzer: &ProfileAnalyzer,
-    counter: &KmerCounter,
-    output: Option<PathBuf>,
-) -> Result<()> {
-    let mut writer: Box<dyn Write> = match output {
-        Some(path) => Box::new(File::create(path)?),
-        None => Box::new(std::io::stdout()),
-    };
-
-    // Write sample information header
-    writeln!(writer, "# Sample Information")?;
-    writeln!(writer, "Total k-mers\t{}", counter.total_kmers())?;
-    writeln!(writer, "Unique k-mers\t{}", counter.unique_kmers())?;
-    writeln!(writer, "K-mer size\t{}", counter.kmer_size())?;
-    writeln!(writer)?;
-
-    // Write match summary header
-    writeln!(writer, "# Match Summary")?;
-    writeln!(writer, "name\tsample_coverage\tprofile_coverage\tshared_kmers\tunique_matches\tjaccard_similarity")?;
-
-    for m in matches {
-        let profile_size = analyzer.get_profile_kmer_count(m.name.clone())?;
-        if profile_size < 0 {
-            return Err(anyhow::anyhow!("Invalid negative kmer count in database"));
-        }
-        
-        // Calculate various metrics after validating profile_size
-        let sample_coverage = (m.shared_kmers as f64 / counter.unique_kmers() as f64) * 100.0;
-        let profile_coverage = (m.shared_kmers as f64 / profile_size as f64) * 100.0;
-        let profile_size = profile_size as usize;
-        let union_size = counter.unique_kmers() + profile_size - m.shared_kmers;
-        let jaccard = (m.shared_kmers as f64 / union_size as f64) * 100.0;
-    
-        writeln!(writer, "{}\t{:.2}\t{:.2}\t{}\t{}\t{:.2}",
-            m.name,
-            sample_coverage,
-            profile_coverage, 
-            m.shared_kmers,
-            m.unique_matches,
-            jaccard,
-        )?;
-    }
-
-    if detailed {
-        for m in matches {
-            if let Some(analysis) = analyzer.get_detailed_analysis(counter, &m.name)? {
-                writeln!(writer, "\n# Detailed analysis for {}", m.name)?;
-                
-                // Profile statistics
-                writeln!(writer, "## Profile Statistics")?;
-                writeln!(writer, "metric\tvalue")?;
-                writeln!(writer, "total_shared_kmers\t{}", analysis.statistics.total_shared)?;
-                writeln!(writer, "unique_to_reference\t{}", analysis.statistics.total_unique_reference)?;
-                writeln!(writer, "unique_to_sample\t{}", analysis.statistics.total_unique_sample)?;
-                writeln!(writer, "avg_frequency_diff\t{:.6}", analysis.statistics.average_frequency_difference)?;
-                writeln!(writer, "marker_matches\t{}", analysis.statistics.marker_kmer_matches)?;
-
-                // K-mer distribution
-                writeln!(writer, "\n## K-mer Distribution")?;
-                writeln!(writer, "### Top Shared K-mers")?;
-                writeln!(writer, "kmer\tsample_freq\tref_freq\tfreq_ratio")?;
-                let mut shared_kmers: Vec<_> = analysis.shared_kmers.iter().collect();
-                shared_kmers.sort_by(|a, b| b.sample_frequency.partial_cmp(&a.sample_frequency).unwrap());
-                for kmer in shared_kmers.iter().take(10) {
-                    let ratio = if kmer.reference_frequency > 0.0 {
-                        kmer.sample_frequency / kmer.reference_frequency
-                    } else {
-                        0.0
-                    };
-                    writeln!(writer, "{}\t{:.6}\t{:.6}\t{:.6}",
-                        kmer.sequence,
-                        kmer.sample_frequency,
-                        kmer.reference_frequency,
-                        ratio,
-                    )?;
-                }
-
-                writeln!(writer, "\n### Most Abundant Reference-Unique K-mers")?;
-                writeln!(writer, "kmer\tfrequency")?;
-                let mut ref_unique: Vec<_> = analysis.unique_to_reference.iter().collect();
-                ref_unique.sort_by(|a, b| b.frequency.partial_cmp(&a.frequency).unwrap());
-                for kmer in ref_unique.iter().take(5) {
-                    writeln!(writer, "{}\t{:.6}", kmer.sequence, kmer.frequency)?;
-                }
-
-                writeln!(writer, "\n### Most Abundant Sample-Unique K-mers")?;
-                writeln!(writer, "kmer\tfrequency")?;
-                let mut sample_unique: Vec<_> = analysis.unique_to_sample.iter().collect();
-                sample_unique.sort_by(|a, b| b.frequency.partial_cmp(&a.frequency).unwrap());
-                for kmer in sample_unique.iter().take(5) {
-                    writeln!(writer, "{}\t{:.6}", kmer.sequence, kmer.frequency)?;
-                }
-
-                writeln!(writer)?;
-            }
-        }
-    }
+    output_analysis(&matches, cmd.detailed, &analyzer, &counter, &cmd.sample_info, &cmd.matches)?;
 
     Ok(())
 }
