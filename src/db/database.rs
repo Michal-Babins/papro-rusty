@@ -286,8 +286,185 @@ impl Database {
                 .collect(),
         })
     }
+
+    pub fn validate(&self) -> Result<ValidationReport> {
+        let mut report = ValidationReport::default();
+
+        // 1. Check table existence and schema
+        self.validate_schema(&mut report)?;
+
+        // 2. Check data integrity
+        self.validate_data(&mut report)?;
+
+        // 3. Check referential integrity
+        self.validate_references(&mut report)?;
+
+        Ok(report)
+    }
+
+    fn validate_schema(&self, report: &mut ValidationReport) -> Result<()> {
+        // Check if tables exist
+        let tables = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('profiles', 'kmers')",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?;
+
+        if tables != 2 {
+            report.add_error("Missing required tables (profiles and/or kmers)");
+            return Ok(());
+        }
+
+        // Verify profiles table schema
+        let profile_cols = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE 
+             name IN ('id', 'name', 'taxonomy_level', 'k', 'total_kmers', 'created_at')",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?;
+
+        if profile_cols != 6 {
+            report.add_error("Profiles table is missing required columns");
+        }
+
+        // Verify kmers table schema
+        let kmer_cols = self.conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('kmers') WHERE 
+             name IN ('profile_id', 'kmer', 'frequency')",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?;
+
+        if kmer_cols != 3 {
+            report.add_error("Kmers table is missing required columns");
+        }
+
+        Ok(())
+    }
+
+    fn validate_data(&self, report: &mut ValidationReport) -> Result<()> {
+        // Check taxonomy levels are valid
+        let invalid_levels: Vec<String> = self.conn.prepare(
+            "SELECT DISTINCT taxonomy_level FROM profiles 
+             WHERE taxonomy_level NOT IN ('Species', 'Genus', 'Strain')"
+        )?.query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+
+        if !invalid_levels.is_empty() {
+            report.add_error(format!(
+                "Invalid taxonomy levels found: {}", 
+                invalid_levels.join(", ")
+            ));
+        }
+
+        // Check for negative k-mer sizes or total counts
+        let invalid_counts = self.conn.query_row(
+            "SELECT COUNT(*) FROM profiles WHERE k <= 0 OR total_kmers <= 0",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?;
+
+        if invalid_counts > 0 {
+            report.add_error("Found profiles with invalid k-mer size or total count");
+        }
+
+        // Check k-mer frequencies are valid (between 0 and 1)
+        let invalid_freqs = self.conn.query_row(
+            "SELECT COUNT(*) FROM kmers WHERE frequency <= 0 OR frequency > 1",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?;
+
+        if invalid_freqs > 0 {
+            report.add_error("Found k-mers with invalid frequencies");
+        }
+
+        // Check frequency sums per profile approximately equal 1
+        let mut stmt = self.conn.prepare(
+            "SELECT profile_id, SUM(frequency) FROM kmers GROUP BY profile_id"
+        )?;
+
+        let sums = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+        })?;
+
+        for sum in sums {
+            let (profile_id, freq_sum) = sum?;
+            if (freq_sum - 1.0).abs() > 0.01 {
+                report.add_error(format!(
+                    "Profile {} has total frequency sum of {:.6} (expected ≈1.0)",
+                    profile_id, freq_sum
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_references(&self, report: &mut ValidationReport) -> Result<()> {
+        // Check for orphaned k-mers (no matching profile)
+        let orphaned = self.conn.query_row(
+            "SELECT COUNT(*) FROM kmers k 
+             LEFT JOIN profiles p ON k.profile_id = p.id 
+             WHERE p.id IS NULL",
+            [],
+            |row| row.get::<_, i64>(0)
+        )?;
+
+        if orphaned > 0 {
+            report.add_error(format!("Found {} orphaned k-mer entries", orphaned));
+        }
+
+        // Check each profile has k-mers
+        let empty_profiles = self.conn.prepare(
+            "SELECT name FROM profiles p 
+             LEFT JOIN kmers k ON p.id = k.profile_id 
+             GROUP BY p.id HAVING COUNT(k.kmer) = 0"
+        )?.query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        if !empty_profiles.is_empty() {
+            report.add_warning(format!(
+                "Found profiles with no k-mers: {}", 
+                empty_profiles.join(", ")
+            ));
+        }
+
+        Ok(())
+    }
 }
 
+#[derive(Default, Debug)]
+pub struct ValidationReport {
+    errors: Vec<String>,
+    warnings: Vec<String>,
+}
+
+impl ValidationReport {
+    fn add_error<S: Into<String>>(&mut self, msg: S) {
+        self.errors.push(msg.into());
+    }
+
+    fn add_warning<S: Into<String>>(&mut self, msg: S) {
+        self.warnings.push(msg.into());
+    }
+
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    pub fn has_warnings(&self) -> bool {
+        !self.warnings.is_empty()
+    }
+
+    pub fn errors(&self) -> &[String] {
+        &self.errors
+    }
+
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
