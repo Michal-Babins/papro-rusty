@@ -53,14 +53,14 @@ pub enum DatabaseSubcommand {
         input_files: Vec<PathBuf>,
 
         /// K-mer size to use
-        #[arg(short, long, default_value = "31")]
+        #[arg(short, long, default_value = "21")]
         kmer_size: usize,
 
         /// Taxonomic level
         #[arg(short, long, value_enum)]
         level: TaxonomyLevel,
 
-        /// Name of the organism (e.g., "e_coli")
+        /// Name of the organism (e.g., "Escherichia_coli")
         #[arg(short, long)]
         name: String,
 
@@ -105,11 +105,7 @@ pub enum DatabaseSubcommand {
     },
 
     /// Show database statistics
-    Stats {
-        /// Include k-mer distribution statistics
-        #[arg(long)]
-        detailed: bool,
-    },
+    Stats,
 
     /// Validate database integrity
     Validate,
@@ -145,13 +141,13 @@ pub struct AnalyzeCommand {
     #[arg(long)]
     pub detailed: bool,
 
-    /// Output format
-    #[arg(short = 'f', long, value_enum, default_value = "text")]
-    pub format: OutputFormat,
+    /// Output file for sample information (TSV format)
+    #[arg(long, default_value = "sample_info.tsv")]
+    pub sample_info: PathBuf,
 
-    /// Output file (defaults to stdout)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    /// Output file for matches summary (TSV format)
+    #[arg(long, default_value = "matches.tsv")]
+    pub matches: PathBuf
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
