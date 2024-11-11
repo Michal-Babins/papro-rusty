@@ -75,10 +75,11 @@ papro-rusty analyze \
     --min-shared-kmers 100 \
     sample.fasta
 
-# Detailed analysis with verbose output
+# Detailed analysis with output
 papro-rusty -v analyze \
     -d profiles.db \
-    -o results.txt \
+    --matches found_matches.tsv \
+    --sample-info found_samples.tsv \
     sample.fasta
 ```
 
@@ -122,7 +123,8 @@ analyze [options] <files>...
   -l, --level <LEVEL>           Taxonomic level
   --min-similarity <FLOAT>      Minimum similarity score (0.0-1.0)
   --min-shared-kmers <INT>      Minimum shared k-mers
-  -o, --output <FILE>           Output file for detailed results
+  --sample-info <SAMPLE_INFO>   Output file for sample information (TSV format) 
+  --matches <MATCHES> Output file for matches summary (TSV format)
 ```
 
 ## 📊 Output Format
@@ -143,6 +145,8 @@ Name                                     Similarity      Shared     Unique
 ---------------------------------------------------------------------------
 Escherichia_coli                        0.945          45678      789
 Salmonella_enterica                     0.432          12345      234
+
+
 ```
 
 ## 🧪 Testing
@@ -239,3 +243,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 Your Name - Michal Babinski - mbabinski17@gmail.com
 
 Project Link: [https://github.com/Michal-Babins/papro-rusty](https://github.com/Michal-Babins/papro-rusty)
+
+
+## TODO
+- Currently for multiple samples input design is poor, need to treat array of inputs as individual
+and preserve metadata for each input sample.
+- Implement detailed database stats reporting
