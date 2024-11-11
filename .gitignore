@@ -2,3 +2,4 @@
 /target
 **/*.rs.bk
 profiles.db
+data/

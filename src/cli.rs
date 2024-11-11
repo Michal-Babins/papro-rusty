@@ -126,7 +126,7 @@ pub struct AnalyzeCommand {
     pub database: PathBuf,
 
     /// K-mer size to use
-    #[arg(short, long, default_value = "31")]
+    #[arg(short, long, default_value = "21")]
     pub kmer_size: usize,
 
     /// Taxonomic level to analyze

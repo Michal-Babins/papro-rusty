@@ -248,17 +248,37 @@ fn output_analysis(
         None => Box::new(std::io::stdout()),
     };
 
-    // Write basic match information
-    writeln!(writer, "name\tsimilarity\tshared_kmers\tunique_matches\tcoverage")?;
+    // Write sample information header
+    writeln!(writer, "# Sample Information")?;
+    writeln!(writer, "Total k-mers\t{}", counter.total_kmers())?;
+    writeln!(writer, "Unique k-mers\t{}", counter.unique_kmers())?;
+    writeln!(writer, "K-mer size\t{}", counter.kmer_size())?;
+    writeln!(writer)?;
+
+    // Write match summary header
+    writeln!(writer, "# Match Summary")?;
+    writeln!(writer, "name\tsample_coverage\tprofile_coverage\tshared_kmers\tunique_matches\tjaccard_similarity")?;
 
     for m in matches {
-        let coverage = (m.shared_kmers as f64 / counter.unique_kmers() as f64) * 100.0;
-        writeln!(writer, "{}\t{:.6}\t{}\t{}\t{:.2}",
+        let profile_size = analyzer.get_profile_kmer_count(m.name.clone())?;
+        if profile_size < 0 {
+            return Err(anyhow::anyhow!("Invalid negative kmer count in database"));
+        }
+        
+        // Calculate various metrics after validating profile_size
+        let sample_coverage = (m.shared_kmers as f64 / counter.unique_kmers() as f64) * 100.0;
+        let profile_coverage = (m.shared_kmers as f64 / profile_size as f64) * 100.0;
+        let profile_size = profile_size as usize;
+        let union_size = counter.unique_kmers() + profile_size - m.shared_kmers;
+        let jaccard = (m.shared_kmers as f64 / union_size as f64) * 100.0;
+    
+        writeln!(writer, "{}\t{:.2}\t{:.2}\t{}\t{}\t{:.2}",
             m.name,
-            m.similarity_score,
+            sample_coverage,
+            profile_coverage, 
             m.shared_kmers,
             m.unique_matches,
-            coverage,
+            jaccard,
         )?;
     }
 
@@ -266,22 +286,52 @@ fn output_analysis(
         for m in matches {
             if let Some(analysis) = analyzer.get_detailed_analysis(counter, &m.name)? {
                 writeln!(writer, "\n# Detailed analysis for {}", m.name)?;
+                
+                // Profile statistics
+                writeln!(writer, "## Profile Statistics")?;
                 writeln!(writer, "metric\tvalue")?;
-                writeln!(writer, "total_shared\t{}", analysis.statistics.total_shared)?;
+                writeln!(writer, "total_shared_kmers\t{}", analysis.statistics.total_shared)?;
                 writeln!(writer, "unique_to_reference\t{}", analysis.statistics.total_unique_reference)?;
                 writeln!(writer, "unique_to_sample\t{}", analysis.statistics.total_unique_sample)?;
                 writeln!(writer, "avg_frequency_diff\t{:.6}", analysis.statistics.average_frequency_difference)?;
                 writeln!(writer, "marker_matches\t{}", analysis.statistics.marker_kmer_matches)?;
 
-                writeln!(writer, "\n# Top shared k-mers")?;
-                writeln!(writer, "kmer\tsample_freq\tref_freq")?;
-                for kmer in analysis.shared_kmers.iter().take(10) {
-                    writeln!(writer, "{}\t{:.6}\t{:.6}",
+                // K-mer distribution
+                writeln!(writer, "\n## K-mer Distribution")?;
+                writeln!(writer, "### Top Shared K-mers")?;
+                writeln!(writer, "kmer\tsample_freq\tref_freq\tfreq_ratio")?;
+                let mut shared_kmers: Vec<_> = analysis.shared_kmers.iter().collect();
+                shared_kmers.sort_by(|a, b| b.sample_frequency.partial_cmp(&a.sample_frequency).unwrap());
+                for kmer in shared_kmers.iter().take(10) {
+                    let ratio = if kmer.reference_frequency > 0.0 {
+                        kmer.sample_frequency / kmer.reference_frequency
+                    } else {
+                        0.0
+                    };
+                    writeln!(writer, "{}\t{:.6}\t{:.6}\t{:.6}",
                         kmer.sequence,
                         kmer.sample_frequency,
                         kmer.reference_frequency,
+                        ratio,
                     )?;
                 }
+
+                writeln!(writer, "\n### Most Abundant Reference-Unique K-mers")?;
+                writeln!(writer, "kmer\tfrequency")?;
+                let mut ref_unique: Vec<_> = analysis.unique_to_reference.iter().collect();
+                ref_unique.sort_by(|a, b| b.frequency.partial_cmp(&a.frequency).unwrap());
+                for kmer in ref_unique.iter().take(5) {
+                    writeln!(writer, "{}\t{:.6}", kmer.sequence, kmer.frequency)?;
+                }
+
+                writeln!(writer, "\n### Most Abundant Sample-Unique K-mers")?;
+                writeln!(writer, "kmer\tfrequency")?;
+                let mut sample_unique: Vec<_> = analysis.unique_to_sample.iter().collect();
+                sample_unique.sort_by(|a, b| b.frequency.partial_cmp(&a.frequency).unwrap());
+                for kmer in sample_unique.iter().take(5) {
+                    writeln!(writer, "{}\t{:.6}", kmer.sequence, kmer.frequency)?;
+                }
+
                 writeln!(writer)?;
             }
         }

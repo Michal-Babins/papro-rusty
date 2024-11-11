@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use anyhow::{Result, Context};
-use log::{info, warn};
+use log::{debug, info, warn};
 use rusqlite::{Connection, params, OptionalExtension};
 use super::types::{ProfileMatch, TaxonomyLevel};
 use crate::kmer::KmerCounter;
@@ -36,14 +36,31 @@ impl ProfileAnalyzer {
             "Analyzing sample against reference profiles at {} level",
             self.taxonomy_level
         );
-
-        // Get all profiles at the specified taxonomy level
+    
+        let profile_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM profiles WHERE taxonomy_level = ?",
+            params![self.taxonomy_level.to_string()],
+            |row| row.get(0)
+        )?;
+    
+        info!("Found {} profiles at {} level", profile_count, self.taxonomy_level);
+    
+        if profile_count == 0 {
+            warn!("No profiles found at {} level in the database", self.taxonomy_level);
+            return Ok(Vec::new());
+        }
+    
         let mut profile_stmt = self.conn.prepare(
             "SELECT id, name, k, total_kmers 
              FROM profiles 
              WHERE taxonomy_level = ?"
         )?;
-
+    
+        let sample_kmers = counter.get_counts();
+        info!("Sample has {} unique k-mers of size {}", 
+            sample_kmers.len(), counter.kmer_size());
+    
+        let mut matches = Vec::new();
         let profiles = profile_stmt.query_map(
             params![self.taxonomy_level.to_string()],
             |row| {
@@ -55,40 +72,46 @@ impl ProfileAnalyzer {
                 ))
             }
         )?;
-
-        // Parellel process
-        let sample_kmers = counter.get_counts();
-        let total_sample_kmers = counter.total_kmers();
-
-        let mut matches = Vec::new();
+    
         for profile_result in profiles {
             let (profile_id, name, k, total_kmers) = profile_result?;
-
-            // K-mer size mismatch doesn't skip
+            info!("Checking profile '{}' (id={}, k={}, total_kmers={})", 
+                name, profile_id, k, total_kmers);
+    
             if k as usize != counter.kmer_size() {
-                warn!("Skipping profile {} due to k-mer size mismatch ({} vs {})",
+                warn!("K-mer size mismatch: profile {} has k={}, sample has k={}", 
                     name, k, counter.kmer_size());
                 continue;
             }
-
-            if let Some(profile_match) = self.compare_with_profile(
+    
+            match self.compare_with_profile(
                 profile_id,
                 &name,
                 &sample_kmers,
-                total_sample_kmers,
+                counter.total_kmers(),
                 total_kmers as usize,
             )? {
-                matches.push(profile_match);
+                Some(profile_match) => {
+                    info!("Found match: {} (similarity={:.4}, shared={}, unique={})",
+                        name, 
+                        profile_match.similarity_score,
+                        profile_match.shared_kmers,
+                        profile_match.unique_matches
+                    );
+                    matches.push(profile_match);
+                }
+                None => {
+                    info!("Profile {} did not meet thresholds (min_similarity={}, min_shared_kmers={})",
+                        name, self.min_similarity, self.min_shared_kmers);
+                }
             }
         }
-
-        // Sort records by similirity score
+    
         matches.sort_by(|a, b| b.similarity_score.partial_cmp(&a.similarity_score).unwrap());
-
         info!("Found {} potential matches", matches.len());
         Ok(matches)
     }
-
+    
     fn compare_with_profile(
         &self,
         profile_id: i64,
@@ -97,56 +120,96 @@ impl ProfileAnalyzer {
         total_sample_kmers: usize,
         total_profile_kmers: usize,
     ) -> Result<Option<ProfileMatch>> {
+        info!("Comparing profile {} (id={})", profile_name, profile_id);
+    
         let mut kmer_stmt = self.conn.prepare(
             "SELECT kmer, frequency FROM kmers WHERE profile_id = ?"
         )?;
-
+    
         let mut shared_kmers = 0;
-        let mut similarity_score = 0.0;
         let mut unique_matches = 0;
-
-        let profile_kmers = kmer_stmt.query_map(params![profile_id], |row| {
+        let mut total_kmers_checked = 0;
+    
+        // Count profile kmers for accurate union calculation
+        let mut profile_unique_kmers = HashSet::new();
+    
+        for kmer_result in kmer_stmt.query_map(params![profile_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, f64>(1)?,
             ))
-        })?;
-
-        // Calculate similarity metrics
-        for kmer_result in profile_kmers {
+        })? {
             let (kmer, ref_freq) = kmer_result?;
+            total_kmers_checked += 1;
+            profile_unique_kmers.insert(kmer.clone());
             
             if let Some(&sample_count) = sample_kmers.get(&kmer) {
                 shared_kmers += 1;
-                
-                // Let's use frequencies 
-                let sample_freq = sample_count as f64 / total_sample_kmers as f64;
-                
-                // Use a wieghted Jaccard Similarty approach
-                similarity_score += (sample_freq * ref_freq).sqrt();
-
-                // Consider as marker k-mer if reference frequency is significant
                 if ref_freq >= 0.001 {
                     unique_matches += 1;
                 }
             }
         }
-
-        // Normalize similarity score
-        if shared_kmers > 0 {
-            similarity_score /= (total_sample_kmers as f64 * total_profile_kmers as f64).sqrt();
-        }
-
+    
+        let sample_size = sample_kmers.len();
+        let profile_size = profile_unique_kmers.len();
+        let union_size = sample_size + profile_size - shared_kmers;
+    
+        // Calculate various similarity metrics
+        let jaccard_similarity = shared_kmers as f64 / union_size as f64;
+        let sample_coverage = shared_kmers as f64 / sample_size as f64;
+        let profile_coverage = shared_kmers as f64 / profile_size as f64;
+    
+        info!(
+            "Comparison summary for {}:
+            Total k-mers checked: {}
+            Shared k-mers: {}
+            Sample unique k-mers: {}
+            Profile unique k-mers: {}
+            Union size: {}
+            
+            Similarity metrics:
+            Jaccard similarity: {:.6}
+            Sample coverage: {:.6} (shared/sample)
+            Profile coverage: {:.6} (shared/profile)
+            Unique marker matches: {}",
+            profile_name, 
+            total_kmers_checked,
+            shared_kmers,
+            sample_size,
+            profile_size,
+            union_size,
+            jaccard_similarity,
+            sample_coverage,
+            profile_coverage,
+            unique_matches
+        );
+    
         
-        if similarity_score >= self.min_similarity && shared_kmers >= self.min_shared_kmers {
+        if sample_coverage >= self.min_similarity && 
+        profile_coverage >= 0.05 && // At least 5% of the profile should match
+        shared_kmers >= self.min_shared_kmers 
+        {
             Ok(Some(ProfileMatch::new(
                 profile_name.to_string(),
-                similarity_score,
+                sample_coverage,  // Keep using sample coverage as main score
                 shared_kmers,
                 unique_matches,
-                total_sample_kmers,
+                sample_size,
             )))
         } else {
+            info!(
+                "Profile {} did not meet thresholds:
+                Sample coverage: {:.6} (minimum: {})
+                Profile coverage: {:.6} (minimum: 0.05)
+                Shared k-mers: {} (minimum: {})",
+                profile_name, 
+                sample_coverage, 
+                self.min_similarity,
+                profile_coverage,
+                shared_kmers, 
+                self.min_shared_kmers
+            );
             Ok(None)
         }
     }
@@ -171,6 +234,7 @@ impl ProfileAnalyzer {
         )?;
 
         let sample_kmers = counter.get_counts();
+        info!("Adding shared k-mer: {:?}", sample_kmers);
         let mut analysis = DetailedAnalysis::new();
 
         let profile_kmers = kmer_stmt.query_map(params![profile_id], |row| {
@@ -203,6 +267,19 @@ impl ProfileAnalyzer {
 
         analysis.calculate_statistics();
         Ok(Some(analysis))
+    }
+
+    pub fn get_profile_kmer_count(&self, name: String) -> Result<i64> {
+        // Query total_kmers directly from profiles table and return error if not found
+        let total_kmers: i64 = self.conn.query_row(
+            "SELECT total_kmers FROM profiles WHERE name = ?",
+            params![name],
+            |row| row.get(0)
+        )?;
+    
+        debug!("Profile '{}' has {} total k-mers from database", name, total_kmers);
+    
+        Ok(total_kmers)
     }
 }
 
@@ -258,6 +335,10 @@ impl DetailedAnalysis {
     }
 
     fn add_shared_kmer(&mut self, sequence: String, sample_freq: f64, ref_freq: f64) {
+        info!(
+            "Adding shared k-mer: {} (sample_freq={:.6}, ref_freq={:.6})",
+            sequence, sample_freq, ref_freq
+        );
         self.shared_kmers.push(SharedKmer {
             sequence,
             sample_frequency: sample_freq,
