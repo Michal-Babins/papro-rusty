@@ -7,6 +7,7 @@ mod kmer;
 use anyhow::{Result, Context};
 use clap::Parser;
 use log::{info, warn};
+use profile::analyzer::DetailedAnalysis;
 use profile::ProfileMatch;
 use std::io::Write;
 use std::fs::File;
@@ -236,6 +237,52 @@ fn handle_db_command(cmd: cli::DatabaseCommand, verbose: bool) -> Result<()> {
 }
 
 fn handle_analyze_command(cmd: cli::AnalyzeCommand, verbose: bool) -> Result<()> {
+    // Open output files and write headers
+    let mut sample_writer = File::create(&cmd.sample_info)?;
+    writeln!(sample_writer, "{:<30}\t{}", "Metric", "Value")?;
+    writeln!(sample_writer, "{}", "-".repeat(50))?;
+
+    let mut matches_writer = File::create(&cmd.matches)?;
+
+    // Process files in parallel
+    let database_path = cmd.database.clone();
+    let min_similarity = cmd.min_similarity;
+    let min_shared_kmers = cmd.min_shared_kmers;
+    let taxonomy_level = cmd.level;
+    let kmer_size = cmd.kmer_size;
+
+    let results: Vec<Result<(String, KmerCounter, Vec<ProfileMatch>)>> = cmd.input_files.par_iter()
+        .map(|file| -> Result<(String, KmerCounter, Vec<ProfileMatch>)> {
+            let analyzer = ProfileAnalyzer::new(
+                &database_path,
+                min_similarity,
+                min_shared_kmers,
+                taxonomy_level.into(),
+            )?;
+
+            let filename = file.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            info!("Processing input file: {}", filename);
+
+            let counter = KmerCounter::new(kmer_size);
+            let reader = FastxReader::new(vec![file.clone()]);
+            let mut sequences = Vec::new();
+            reader.process_all(|sequence, _id| {
+                sequences.push(sequence.to_vec());
+                Ok(())
+            })?;
+
+            counter.count_sequences(sequences.into_par_iter())?;
+            info!("Found {} unique k-mers in sample {}", counter.unique_kmers(), filename);
+
+            let matches = analyzer.analyze_sample(&counter)?;
+            Ok((filename, counter, matches))
+        })
+        .collect();
+
+    // Write results using output_analysis
     let analyzer = ProfileAnalyzer::new(
         &cmd.database,
         cmd.min_similarity,
@@ -243,21 +290,18 @@ fn handle_analyze_command(cmd: cli::AnalyzeCommand, verbose: bool) -> Result<()>
         cmd.level.into(),
     )?;
 
-    info!("Processing input files...");
-    let counter = KmerCounter::new(cmd.kmer_size);
-    let reader = FastxReader::new(cmd.input_files);
-    
-    let mut sequences = Vec::new();
-    reader.process_all(|sequence, _id| {
-        sequences.push(sequence.to_vec());
-        Ok(())
-    })?;
-
-    counter.count_sequences(sequences.into_par_iter())?;
-    info!("Found {} unique k-mers in sample", counter.unique_kmers());
-
-    let matches = analyzer.analyze_sample(&counter)?;
-    output_analysis(&matches, cmd.detailed, &analyzer, &counter, &cmd.sample_info, &cmd.matches)?;
+    for result in results {
+        let (filename, counter, matches) = result?;
+        output_analysis(
+            &filename,
+            &counter,
+            &matches,
+            cmd.detailed,
+            &analyzer,
+            &mut sample_writer,
+            &mut matches_writer,
+        )?;
+    }
 
     Ok(())
 }

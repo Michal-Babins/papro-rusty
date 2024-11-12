@@ -246,6 +246,5 @@ Project Link: [https://github.com/Michal-Babins/papro-rusty](https://github.com/
 
 
 ## TODO
-- Currently for multiple samples input design is poor, need to treat array of inputs as individual
-and preserve metadata for each input sample.
-- Implement detailed database stats reporting
+- Fix how metrics are reported, need to be more robust and more tested. Right now the metrics report all the 
+kmers as rare when there is an overlap. I don't like the core and rare kmer approach. Need to think about how to approach match statistics that are meaningful. 
