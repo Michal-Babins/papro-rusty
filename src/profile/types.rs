@@ -24,18 +24,16 @@ impl std::fmt::Display for TaxonomyLevel {
 pub struct ProfileMatch {
     /// Name of the matched profile
     pub name: String,
-    /// Sample coverage score (0.0 to 1.0)
+    /// Percentage of sample k-mers found in profile
     pub sample_coverage: f64,
     /// Number of k-mers shared between sample and reference
     pub shared_kmers: usize,
-    /// Number of core k-mers (frequency >= 0.95)
-    pub core_matches: usize,
-    /// Number of rare k-mers (frequency <= 0.10)
-    pub rare_matches: usize,
-    /// Average frequency of matched k-mers
-    pub avg_frequency: f64,
-    /// Size ratio of sample to profile
+    /// Ratio of sample size to profile size
     pub size_ratio: f64,
+    /// Score for how unique these matches are to this profile
+    pub uniqueness_score: f64,
+    /// Confidence score for this match
+    pub confidence_score: f64,
 }
 
 /// Represents a k-mer profile
@@ -72,22 +70,20 @@ impl ProfileMatch {
         name: String,
         sample_coverage: f64,
         shared_kmers: usize,
-        core_matches: usize,
-        rare_matches: usize,
-        avg_frequency: f64,
         size_ratio: f64,
+        uniqueness_score: f64,
+        confidence_score: f64,
     ) -> Self {
         ProfileMatch {
             name,
             sample_coverage,
             shared_kmers,
-            core_matches,
-            rare_matches,
-            avg_frequency,
             size_ratio,
+            uniqueness_score,
+            confidence_score,
         }
     }
-}
+ }
 
 #[cfg(test)]
 mod tests {
@@ -109,23 +105,21 @@ mod tests {
 
     #[test]
     fn test_profile_match_creation() {
-        let match_result = ProfileMatch::new(
-            "Test Match".to_string(),
-            0.95,  // sample_coverage
-            1000,  // shared_kmers
-            500,   // core_matches (k-mers with freq >= 0.95)
-            100,   // rare_matches (k-mers with freq <= 0.10)
-            0.45,  // avg_frequency
-            0.85,  // size_ratio
-        );
+    let match_result = ProfileMatch::new(
+        "Test Match".to_string(),
+        0.95,  // sample_coverage
+        1000,  // shared_kmers
+        0.85,  // size_ratio
+        0.75,  // uniqueness_score
+        0.82,  // confidence_score
+    );
 
-        assert_eq!(match_result.name, "Test Match");
-        assert_eq!(match_result.sample_coverage, 0.95);
-        assert_eq!(match_result.shared_kmers, 1000);
-        assert_eq!(match_result.core_matches, 500);
-        assert_eq!(match_result.rare_matches, 100);
-        assert!((match_result.avg_frequency - 0.45).abs() < f64::EPSILON);
-        assert!((match_result.size_ratio - 0.85).abs() < f64::EPSILON);
+    assert_eq!(match_result.name, "Test Match");
+    assert_eq!(match_result.sample_coverage, 0.95);
+    assert_eq!(match_result.shared_kmers, 1000);
+    assert!((match_result.size_ratio - 0.85).abs() < f64::EPSILON);
+    assert!((match_result.uniqueness_score - 0.75).abs() < f64::EPSILON);
+    assert!((match_result.confidence_score - 0.82).abs() < f64::EPSILON);
     }
 
     #[test]
